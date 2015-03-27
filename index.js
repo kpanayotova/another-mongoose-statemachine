@@ -35,6 +35,12 @@ module.exports = function (schema, options) {
       var from;
       var exit;
 
+      // if state not set yet, assume default
+      if (!self.state) {
+        self.state = defaultStateName;
+      }
+
+      // check validity of from state
       if(_.isString(transition.from)) {
         if('*' === transition.from) {
           from = self.state;
@@ -45,48 +51,52 @@ module.exports = function (schema, options) {
         from = _.find(transition.from, function(s) { return s === self.state; });
       }
 
-      if(from) {
-        exit = states[from].exit;
-      }
-
-      var enter = states[transition.to].enter;
-      var guard = transition.guard;
-      var behavior = transition.behavior;
-
-      if(_.isFunction(guard)) {
-        if(!guard.apply(self)) {
-          return callback(new Error('guard failed'));
-        }
-      } else if(_.isPlainObject(guard)) {
-        _.forEach(guard, function(v, k) {
-          var tmp = v.apply(self);
-          if(tmp) {
-            self.invalidate(k, tmp);
-          }
-        });
-        if(self.$__.validationError) {
-          return callback(self.$__.validationError);
-        }
-      }
-
+      // if from state allowed for transition
       if(self.state === from) {
         self.state = transition.to;
+
+        if(from) {
+          exit = states[from].exit;
+        }
+
+        var enter = states[transition.to].enter;
+        var guard = transition.guard;
+        var behavior = transition.behavior;
+
+        // evaluate transition guard
+        if(_.isFunction(guard)) {
+          if(!guard.apply(self)) {
+            return callback(new Error('Guard failed'), self);
+          }
+        } else if(_.isPlainObject(guard)) {
+          _.forEach(guard, function(v, k) {
+            var tmp = v.apply(self);
+            if(tmp) {
+              self.invalidate(k, tmp);
+            }
+          });
+          if(self.$__.validationError) {
+            return callback(self.$__.validationError, self);
+          }
+        }
 
         if(_.has(defaultState, 'value')) {
           self.stateValue = states[self.state].value;
         }
+
+        self.save(function(err) {
+          if(err) {
+            return callback(err, self);
+          }
+
+          if(exit) { exit.call(self); }
+          if(behavior) { behavior.call(self); }
+          if(enter) { enter.call(self); }
+          return callback(null, self);
+        });
+      } else {
+          return callback(new Error('Invalid transition'), self);
       }
-
-      self.save(function(err) {
-        if(err) {
-          return callback(err);
-        }
-
-        if(exit) { exit.call(self); }
-        if(behavior) { behavior.call(self); }
-        if(enter) { enter.call(self); }
-        return callback();
-      });
     };
   }
 
@@ -107,7 +117,7 @@ function staticTransitionize(transitionName) {
         return callback(err);
       }
       if(!item) {
-        return callback(new Error('finded null'));
+        return callback(new Error('Not found'));
       }
       item[transitionName].call(item, callback);
     });
